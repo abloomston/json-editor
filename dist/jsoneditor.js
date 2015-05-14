@@ -228,6 +228,84 @@ var $triggerc = function(el,event) {
   el.dispatchEvent(e);
 };
 
+/*
+ * Minimal functionality taken from math.js v1.7.0 for floating point arithmetic.
+ * math.js is under Apache license, see https://github.com/josdejong/mathjs/blob/master/LICENSE for license
+ */
+var $math = {
+  epsilon: 1e-14,
+  dbl_epsilon: Number.EPSILON || 2.2204460492503130808472633361816E-16,
+  isNumber: function(value) {
+    return (value instanceof Number) || (typeof value == 'number');
+  },
+  mod: function(x, y) {
+    if (y > 0) {
+      // We don't use JavaScript's % operator here as this doesn't work
+      // correctly for x < 0 and x == 0
+      // see http://en.wikipedia.org/wiki/Modulo_operation
+      return x - y * Math.floor(x / y);
+    }
+    else if (y === 0) {
+      return x;
+    }
+    else { // y < 0
+      // TODO: implement mod for a negative divisor
+      throw new Error('Cannot calculate mod for a negative divisor');
+    }
+  },
+  nearlyEqual: function(x, y) {
+    // use "==" operator, handles infinities
+    if (x == y) return true;
+
+    // NaN
+    if (isNaN(x) || isNaN(y)) return false;
+
+    // at this point x and y should be finite
+    if(isFinite(x) && isFinite(y)) {
+      // check numbers are very close, needed when comparing numbers near zero
+      var diff = Math.abs(x - y);
+      if (diff < $math.dbl_epsilon) {
+	return true;
+      }
+      else {
+	// use relative error
+	return diff <= Math.max(Math.abs(x), Math.abs(y)) * $math.epsilon;
+      }
+    }
+
+    // Infinite and Number or negative Infinite and positive Infinite cases
+    return false;
+  },
+  larger: function(x, y) {
+    if ($math.isNumber(x) && $math.isNumber(y)) {
+      return !$math.nearlyEqual(x, y, $math.epsilon) && x > y;
+    } else {
+      throw new TypeError('larger', typeof(x), typeof(y));
+    }
+  },
+  largerEq: function(x, y) {
+    if ($math.isNumber(x) && $math.isNumber(y)) {
+      return $math.nearlyEqual(x, y, $math.epsilon) || x > y;
+    } else {
+      throw new TypeError('largerEq', typeof(x), typeof(y));
+    }
+  },
+  smaller: function(x, y) {
+    if ($math.isNumber(x) && $math.isNumber(y)) {
+      return !$math.nearlyEqual(x, y, $math.epsilon) && x < y;
+    } else {
+      throw new TypeError('smaller', typeof(x), typeof(y));
+    }
+  },
+  smallerEq: function(x, y) {
+    if ($math.isNumber(x) && $math.isNumber(y)) {
+      return !$math.nearlyEqual(x, y, $math.epsilon) && x < y;
+    } else {
+      throw new TypeError('smallerEq', typeof(x), typeof(y));
+    }
+  }
+};
+
 var JSONEditor = function(element,options) {
   if (!(element instanceof Element)) {
     throw new Error('element should be an instance of Element');
@@ -1016,26 +1094,27 @@ JSONEditor.Validator = Class.extend({
     if(typeof value === "number") {
       // `multipleOf` and `divisibleBy`
       if(schema.multipleOf || schema.divisibleBy) {
-        valid = value / (schema.multipleOf || schema.divisibleBy);
-        if(valid !== Math.floor(valid)) {
+	var divisor = schema.multipleOf || schema.divisibleBy;
+	valid = $math.mod(value, divisor);
+        if(!$math.nearlyEqual(valid, 0.0) && !$math.nearlyEqual(valid, divisor)) {
           errors.push({
             path: path,
             property: schema.multipleOf? 'multipleOf' : 'divisibleBy',
-            message: this.translate('error_multipleOf', [schema.multipleOf || schema.divisibleBy])
+            message: this.translate('error_multipleOf', [divisor])
           });
         }
       }
 
       // `maximum`
       if(schema.hasOwnProperty('maximum')) {
-        if(schema.exclusiveMaximum && value >= schema.maximum) {
+        if(schema.exclusiveMaximum && $math.largerEq(value, schema.maximum)) {
           errors.push({
             path: path,
             property: 'maximum',
             message: this.translate('error_maximum_excl', [schema.maximum])
           });
         }
-        else if(!schema.exclusiveMaximum && value > schema.maximum) {
+        else if(!schema.exclusiveMaximum && $math.larger(value, schema.maximum)) {
           errors.push({
             path: path,
             property: 'maximum',
@@ -1046,14 +1125,14 @@ JSONEditor.Validator = Class.extend({
 
       // `minimum`
       if(schema.hasOwnProperty('minimum')) {
-        if(schema.exclusiveMinimum && value <= schema.minimum) {
+        if(schema.exclusiveMinimum && $math.smallerEq(value, schema.minimum)) {
           errors.push({
             path: path,
             property: 'minimum',
             message: this.translate('error_minimum_excl', [schema.minimum])
           });
         }
-        else if(!schema.exclusiveMinimum && value < schema.minimum) {
+        else if(!schema.exclusiveMinimum && $math.smaller(value, schema.minimum)) {
           errors.push({
             path: path,
             property: 'minimum',
@@ -4297,7 +4376,7 @@ JSONEditor.defaults.editors.table = JSONEditor.defaults.editors.array.extend({
   }
 });
 
-// Multiple Editor (for when `type` is an array)
+// Multiple Editor (for when `type` is an array, also when `oneOf` is present)
 JSONEditor.defaults.editors.multiple = JSONEditor.AbstractEditor.extend({
   register: function() {
     if(this.editors) {
@@ -4528,6 +4607,7 @@ JSONEditor.defaults.editors.multiple = JSONEditor.AbstractEditor.extend({
   setValue: function(val,initial) {
     // Determine type by getting the first one that validates
     var self = this;
+    var prev_type = this.type;
     $each(this.validators, function(i,validator) {
       if(!validator.validate(val).length) {
         self.type = i;
@@ -4536,12 +4616,15 @@ JSONEditor.defaults.editors.multiple = JSONEditor.AbstractEditor.extend({
       }
     });
     
-    this.switchEditor(this.type);
+    var type_changed = this.type != prev_type;
+    if (type_changed) {
+	this.switchEditor(this.type);
+    }
 
     this.editors[this.type].setValue(val,initial);
 
     this.refreshValue();
-    self.onChange();
+    self.onChange(type_changed);
   },
   destroy: function() {
     $each(this.editors, function(type,editor) {
@@ -5909,6 +5992,11 @@ JSONEditor.defaults.themes.bootstrap2 = JSONEditor.AbstractTheme.extend({
       input.controls.className = input.controlgroup.className.replace(/controls/g,'').replace(/[ ]{2,}/g,' ');
       input.style.marginBottom = 0;
     }
+    if (this.queuedInputErrorText) {
+        var text = this.queuedInputErrorText;
+        delete this.queuedInputErrorText;
+        this.addInputError(input,text);
+    }
 
     // TODO: use bootstrap slider
   },
@@ -5973,6 +6061,10 @@ JSONEditor.defaults.themes.bootstrap2 = JSONEditor.AbstractTheme.extend({
     return el;
   },
   addInputError: function(input,text) {
+    if(!input.controlgroup) {
+        this.queuedInputErrorText = text;
+        return; 
+    }
     if(!input.controlgroup || !input.controls) return;
     input.controlgroup.className += ' error';
     if(!input.errmsg) {
@@ -5987,6 +6079,9 @@ JSONEditor.defaults.themes.bootstrap2 = JSONEditor.AbstractTheme.extend({
     input.errmsg.textContent = text;
   },
   removeInputError: function(input) {
+    if(!input.controlgroup) {
+        delete this.queuedInputErrorText;
+    }
     if(!input.errmsg) return;
     input.errmsg.style.display = 'none';
     input.controlgroup.className = input.controlgroup.className.replace(/\s?error/g,'');
@@ -6061,6 +6156,11 @@ JSONEditor.defaults.themes.bootstrap3 = JSONEditor.AbstractTheme.extend({
     input.controlgroup = this.closest(input,'.form-group');
     if(this.closest(input,'.compact')) {
       input.controlgroup.style.marginBottom = 0;
+    }
+    if (this.queuedInputErrorText) {
+        var text = this.queuedInputErrorText;
+        delete this.queuedInputErrorText;
+        this.addInputError(input,text);
     }
 
     // TODO: use bootstrap slider
@@ -6141,7 +6241,10 @@ JSONEditor.defaults.themes.bootstrap3 = JSONEditor.AbstractTheme.extend({
   },
 
   addInputError: function(input,text) {
-    if(!input.controlgroup) return;
+    if(!input.controlgroup) {
+        this.queuedInputErrorText = text;
+        return; 
+    }
     input.controlgroup.className += ' has-error';
     if(!input.errmsg) {
       input.errmsg = document.createElement('p');
@@ -6155,6 +6258,9 @@ JSONEditor.defaults.themes.bootstrap3 = JSONEditor.AbstractTheme.extend({
     input.errmsg.textContent = text;
   },
   removeInputError: function(input) {
+    if(!input.controlgroup) {
+        delete this.queuedInputErrorText;
+    }
     if(!input.errmsg) return;
     input.errmsg.style.display = 'none';
     input.controlgroup.className = input.controlgroup.className.replace(/\s?has-error/g,'');
@@ -6235,10 +6341,16 @@ JSONEditor.defaults.themes.foundation = JSONEditor.AbstractTheme.extend({
     return el;
   },
   afterInputReady: function(input) {
+    if(input.group) return;
     if(this.closest(input,'.compact')) {
       input.style.marginBottom = 0;
     }
     input.group = this.closest(input,'.form-control');
+    if (this.queuedInputErrorText) {
+        var text = this.queuedInputErrorText;
+        delete this.queuedInputErrorText;
+        this.addInputError(input,text);
+    }
   },
   getFormInputLabel: function(text) {
     var el = this._super(text);
@@ -6281,7 +6393,10 @@ JSONEditor.defaults.themes.foundation = JSONEditor.AbstractTheme.extend({
     return el;
   },
   addInputError: function(input,text) {
-    if(!input.group) return;
+    if(!input.group) {
+        this.queuedInputErrorText = text;
+        return;
+    }
     input.group.className += ' error';
     
     if(!input.errmsg) {
@@ -6295,6 +6410,9 @@ JSONEditor.defaults.themes.foundation = JSONEditor.AbstractTheme.extend({
     input.errmsg.textContent = text;
   },
   removeInputError: function(input) {
+    if(!input.group) {
+        delete this.queuedInputErrorText;
+    }
     if(!input.errmsg) return;
     input.group.className = input.group.className.replace(/ error/g,'');
     input.errmsg.style.display = 'none';
@@ -6653,9 +6771,17 @@ JSONEditor.defaults.themes.jqueryui = JSONEditor.AbstractTheme.extend({
   afterInputReady: function(input) {
     if(input.controls) return;
     input.controls = this.closest(input,'.form-control');
+    if (this.queuedInputErrorText) {
+        var text = this.queuedInputErrorText;
+        delete this.queuedInputErrorText;
+        this.addInputError(input,text);
+    }
   },
   addInputError: function(input,text) {
-    if(!input.controls) return;
+    if(!input.controls) {
+        this.queuedInputErrorText = text;
+        return;
+    }
     if(!input.errmsg) {
       input.errmsg = document.createElement('div');
       input.errmsg.className = 'ui-state-error';
@@ -6668,6 +6794,9 @@ JSONEditor.defaults.themes.jqueryui = JSONEditor.AbstractTheme.extend({
     input.errmsg.textContent = text;
   },
   removeInputError: function(input) {
+    if(!input.controls) {
+        delete this.queuedInputErrorText;
+    }
     if(!input.errmsg) return;
     input.errmsg.style.display = 'none';
   },
