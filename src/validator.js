@@ -208,27 +208,26 @@ JSONEditor.Validator = Class.extend({
     if(typeof value === "number") {
       // `multipleOf` and `divisibleBy`
       if(schema.multipleOf || schema.divisibleBy) {
-	var divisor = schema.multipleOf || schema.divisibleBy;
-	valid = $math.mod(value, divisor);
-        if(!$math.nearlyEqual(valid, 0.0) && !$math.nearlyEqual(valid, divisor)) {
+        valid = value / (schema.multipleOf || schema.divisibleBy);
+        if(valid !== Math.floor(valid)) {
           errors.push({
             path: path,
             property: schema.multipleOf? 'multipleOf' : 'divisibleBy',
-            message: this.translate('error_multipleOf', [divisor])
+            message: this.translate('error_multipleOf', [schema.multipleOf || schema.divisibleBy])
           });
         }
       }
 
       // `maximum`
       if(schema.hasOwnProperty('maximum')) {
-        if(schema.exclusiveMaximum && $math.largerEq(value, schema.maximum)) {
+        if(schema.exclusiveMaximum && value >= schema.maximum) {
           errors.push({
             path: path,
             property: 'maximum',
             message: this.translate('error_maximum_excl', [schema.maximum])
           });
         }
-        else if(!schema.exclusiveMaximum && $math.larger(value, schema.maximum)) {
+        else if(!schema.exclusiveMaximum && value > schema.maximum) {
           errors.push({
             path: path,
             property: 'maximum',
@@ -239,14 +238,14 @@ JSONEditor.Validator = Class.extend({
 
       // `minimum`
       if(schema.hasOwnProperty('minimum')) {
-        if(schema.exclusiveMinimum && $math.smallerEq(value, schema.minimum)) {
+        if(schema.exclusiveMinimum && value <= schema.minimum) {
           errors.push({
             path: path,
             property: 'minimum',
             message: this.translate('error_minimum_excl', [schema.minimum])
           });
         }
-        else if(!schema.exclusiveMinimum && $math.smaller(value, schema.minimum)) {
+        else if(!schema.exclusiveMinimum && value < schema.minimum) {
           errors.push({
             path: path,
             property: 'minimum',
